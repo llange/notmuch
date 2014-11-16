@@ -1,3 +1,12 @@
+Notmuch X.XX (201X-XX-XX)
+=========================
+
+Ruby Bindings
+-------------
+
+Add support for `notmuch_database_get_all_tags`
+
+
 Notmuch 0.19 (2014-11-14)
 =========================
 
