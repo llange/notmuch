@@ -11,7 +11,9 @@ dir = File.join('..', '..', 'lib')
 $INCFLAGS = "-I#{dir} #{$INCFLAGS}"
 
 # make sure there are no undefined symbols
-$LDFLAGS += ' -Wl,--no-undefined'
+if CONFIG["arch"] !~ /darwin/
+  $LDFLAGS += " -Wl,--no-undefined"
+end
 
 def have_local_library(lib, path, func, headers = nil)
   checking_for checking_message(func, lib) do
@@ -22,9 +24,9 @@ def have_local_library(lib, path, func, headers = nil)
   end
 end
 
-if not have_local_library('libnotmuch.so', dir, 'notmuch_database_create', 'notmuch.h')
-  exit 1
-end
+['so', 'dylib', 'dll'].detect(lambda { print "Local library notmuch seems absent\n"; exit }) { |ext|
+	have_local_library("libnotmuch.#{ext}", dir, 'notmuch_database_create', 'notmuch.h')
+}
 
 # Create Makefile
 dir_config('notmuch')
