@@ -27,73 +27,116 @@
 
 ;;
 
-(defvar notmuch-wash-signature-regexp
-  "^\\(-- ?\\|_+\\)$"
-  "Pattern to match a line that separates content from signature.")
+(defgroup notmuch-wash nil
+  "Cleaning up messages for display."
+  :group 'notmuch)
 
-(defvar notmuch-wash-citation-regexp
-  "\\(^[[:space:]]*>.*\n\\)+"
-  "Pattern to match citation lines.")
+(defcustom notmuch-wash-signature-regexp "^\\(-- ?\\|_+\\)$"
+  "Pattern to match a line that separates content from signature."
+  :type 'regexp
+  :group 'notmuch-wash)
 
-(defvar notmuch-wash-original-regexp "^\\(--+\s?[oO]riginal [mM]essage\s?--+\\)$"
-  "Pattern to match a line that separates original message from reply in top-posted message.")
+(defcustom notmuch-wash-citation-regexp "\\(^[[:space:]]*>.*\n\\)+"
+  "Pattern to match citation lines."
+  :type 'regexp
+  :group 'notmuch-wash)
 
-(defvar notmuch-wash-button-signature-hidden-format
+(defcustom notmuch-wash-original-regexp "^\\(--+\s?[oO]riginal [mM]essage\s?--+\\)$"
+  "Pattern to match a line that separates original message from
+reply in top-posted message."
+  :type 'regexp
+  :group 'notmuch-wash)
+
+(defcustom notmuch-wash-button-signature-hidden-format
   "[ %d-line signature. Click/Enter to show. ]"
   "String used to construct button text for hidden signatures.
-Can use up to one integer format parameter, i.e. %d")
+Can use up to one integer format parameter, i.e. %d."
+  :type 'string
+  :group 'notmuch-wash)
 
-(defvar notmuch-wash-button-signature-visible-format
+(defcustom notmuch-wash-button-signature-visible-format
   "[ %d-line signature. Click/Enter to hide. ]"
   "String used to construct button text for visible signatures.
-Can use up to one integer format parameter, i.e. %d")
+Can use up to one integer format parameter, i.e. %d."
+  :type 'string
+  :group 'notmuch-wash)
 
-(defvar notmuch-wash-button-citation-hidden-format
+(defcustom notmuch-wash-button-citation-hidden-format
   "[ %d more citation lines. Click/Enter to show. ]"
   "String used to construct button text for hidden citations.
-Can use up to one integer format parameter, i.e. %d")
+Can use up to one integer format parameter, i.e. %d."
+  :type 'string
+  :group 'notmuch-wash)
 
-(defvar notmuch-wash-button-citation-visible-format
+(defcustom notmuch-wash-button-citation-visible-format
   "[ %d more citation lines. Click/Enter to hide. ]"
   "String used to construct button text for visible citations.
-Can use up to one integer format parameter, i.e. %d")
+Can use up to one integer format parameter, i.e. %d."
+  :type 'string
+  :group 'notmuch-wash)
 
-(defvar notmuch-wash-button-original-hidden-format
+(defcustom notmuch-wash-button-original-hidden-format
   "[ %d-line hidden original message. Click/Enter to show. ]"
   "String used to construct button text for hidden citations.
-Can use up to one integer format parameter, i.e. %d")
+Can use up to one integer format parameter, i.e. %d."
+  :type 'string
+  :group 'notmuch-wash)
 
-(defvar notmuch-wash-button-original-visible-format
+(defcustom notmuch-wash-button-original-visible-format
   "[ %d-line original message. Click/Enter to hide. ]"
   "String used to construct button text for visible citations.
-Can use up to one integer format parameter, i.e. %d")
+Can use up to one integer format parameter, i.e. %d."
+  :type 'string
+  :group 'notmuch-wash)
 
-(defvar notmuch-wash-signature-lines-max 12
-  "Maximum length of signature that will be hidden by default.")
+(defcustom notmuch-wash-signature-lines-max 12
+  "Maximum length of signature that will be hidden by default."
+  :type 'integer
+  :group 'notmuch-wash)
 
-(defvar notmuch-wash-citation-lines-prefix 3
+(defcustom notmuch-wash-citation-lines-prefix 3
   "Always show at least this many lines from the start of a citation.
 
 If there is one more line than the sum of
 `notmuch-wash-citation-lines-prefix' and
 `notmuch-wash-citation-lines-suffix', show that, otherwise
-collapse the remaining lines into a button.")
+collapse the remaining lines into a button."
+  :type 'integer
+  :group 'notmuch-wash)
 
-(defvar notmuch-wash-citation-lines-suffix 3
+(defcustom notmuch-wash-citation-lines-suffix 3
   "Always show at least this many lines from the end of a citation.
 
 If there is one more line than the sum of
 `notmuch-wash-citation-lines-prefix' and
 `notmuch-wash-citation-lines-suffix', show that, otherwise
-collapse the remaining lines into a button.")
+collapse the remaining lines into a button."
+  :type 'integer
+  :group 'notmuch-wash)
 
-(defvar notmuch-wash-wrap-lines-length nil
+(defcustom notmuch-wash-wrap-lines-length nil
   "Wrap line after at most this many characters.
 
 If this is nil, lines in messages will be wrapped to fit in the
 current window. If this is a number, lines will be wrapped after
 this many characters or at the window width (whichever one is
-lower).")
+lower)."
+  :type '(choice (const :tag "window width" nil)
+		 (integer :tag "number of characters"))
+  :group 'notmuch-wash)
+
+(defface notmuch-wash-toggle-button
+  '((t (:inherit font-lock-comment-face)))
+  "Face used for buttons toggling the visibility of washed away
+message parts."
+  :group 'notmuch-wash
+  :group 'notmuch-faces)
+
+(defface notmuch-wash-cited-text
+  '((t (:inherit message-cited-text)))
+  "Face used for cited text."
+  :group 'notmuch-wash
+  :group 'notmuch-faces)
 
 (defun notmuch-wash-toggle-invisible-action (cite-button)
   ;; Toggle overlay visibility
@@ -117,7 +160,7 @@ lower).")
 (define-button-type 'notmuch-wash-button-invisibility-toggle-type
   'action 'notmuch-wash-toggle-invisible-action
   'follow-link t
-  'face 'font-lock-comment-face
+  'face 'notmuch-wash-toggle-button
   :supertype 'notmuch-button-type)
 
 (define-button-type 'notmuch-wash-button-citation-toggle-type
@@ -192,7 +235,7 @@ that PREFIX should not include a newline."
     (let* ((cite-start (match-beginning 0))
 	   (cite-end (match-end 0))
 	   (cite-lines (count-lines cite-start cite-end)))
-      (overlay-put (make-overlay cite-start cite-end) 'face 'message-cited-text)
+      (overlay-put (make-overlay cite-start cite-end) 'face 'notmuch-wash-cited-text)
       (when (> cite-lines (+ notmuch-wash-citation-lines-prefix
 			     notmuch-wash-citation-lines-suffix
 			     1))

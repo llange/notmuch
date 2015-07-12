@@ -40,6 +40,8 @@ indicate user-supplied values):
 
 -  attachment:<word>
 
+-  mimetype:<word>
+
 -  tag:<tag> (or is:<tag>)
 
 -  id:<message-id>
@@ -65,6 +67,10 @@ by including quotation marks around the phrase, immediately following
 
 The **attachment:** prefix can be used to search for specific filenames
 (or extensions) of attachments to email messages.
+
+The **mimetype:** prefix will be used to match text from the
+content-types of MIME parts within email messages (as specified by the
+sender).
 
 For **tag:** and **is:** valid tag values include **inbox** and
 **unread** by default for new messages added by **notmuch new** as well
@@ -118,16 +124,127 @@ The time range can also be specified using timestamps with a syntax of:
 Each timestamp is a number representing the number of seconds since
 1970-01-01 00:00:00 UTC.
 
-In addition to individual terms, multiple terms can be combined with
-Boolean operators ( **and**, **or**, **not** , etc.). Each term in the
-query will be implicitly connected by a logical AND if no explicit
-operator is provided, (except that terms with a common prefix will be
-implicitly combined with OR until we get Xapian defect #402 fixed).
+Operators
+---------
 
-Parentheses can also be used to control the combination of the Boolean
-operators, but will have to be protected from interpretation by the
-shell, (such as by putting quotation marks around any parenthesized
-expression).
+In addition to individual terms, multiple terms can be combined with
+Boolean operators (**and**, **or**, **not**, and **xor**). Each term
+in the query will be implicitly connected by a logical AND if no
+explicit operator is provided (except that terms with a common prefix
+will be implicitly combined with OR).  The shorthand '-<term>' can be
+used for 'not <term>' but unfortunately this does not work at the
+start of an expression.  Parentheses can also be used to control the
+combination of the Boolean operators, but will have to be protected
+from interpretation by the shell, (such as by putting quotation marks
+around any parenthesized expression).
+
+In addition to the standard boolean operators, Xapian provides several
+operators specific to text searching.
+
+::
+
+        notmuch search term1 NEAR term2
+
+will return results where term1 is within 10 words of term2. The
+threshold can be set like this:
+
+::
+
+        notmuch search term1 NEAR/2 term2
+
+The search
+
+::
+
+        notmuch search term1 ADJ term2
+
+will return results where term1 is within 10 words of term2, but in the
+same order as in the query. The threshold can be set the same as with
+NEAR:
+
+::
+
+        notmuch search term1 ADJ/7 term2
+
+
+Stemming
+--------
+
+**Stemming** in notmuch means that these searches
+
+::
+
+        notmuch search detailed
+        notmuch search details
+        notmuch search detail
+
+will all return identical results, because Xapian first "reduces" the
+term to the common stem (here 'detail') and then performs the search.
+
+There are two ways to turn this off: a search for a capitalized word
+will be performed unstemmed, so that one can search for "John" and not
+get results for "Johnson"; phrase searches are also unstemmed (see
+below for details).  Stemming is currently only supported for
+English. Searches for words in other languages will be performed unstemmed.
+
+Wildcards
+---------
+
+It is possible to use a trailing '\*' as a wildcard. A search for
+'wildc\*' will match 'wildcard', 'wildcat', etc.
+
+
+Boolean and Probabilistic Prefixes
+----------------------------------
+
+Xapian (and hence notmuch) prefixes are either **boolean**, supporting
+exact matches like "tag:inbox"  or **probabilistic**, supporting a more flexible **term** based searching. The prefixes currently supported by notmuch are as follows.
+
++------------------+-----------------------+
+|Boolean           |Probabilistic          |
++------------------+-----------------------+
+| **tag:** **id:** | **from:** **to:**     |
+|**thread:**       |**subject:**           |
+|**folder:**       |**attachment:**        |
+|**path:**         |**mimetype:**          |
+|                  |                       |
++------------------+-----------------------+
+
+Terms and phrases
+-----------------
+
+In general Xapian distinguishes between lists of terms and
+**phrases**. Phrases are indicated by double quotes (but beware you
+probably need to protect those from your shell) and insist that those
+unstemmed words occur in that order. One useful, but initially
+surprising feature is that the following are equivalant ways to write
+the same phrase.
+
+- "a list of words"
+- a-list-of-words
+- a/list/of/words
+- a.list.of.words
+
+Both parenthesised lists of terms and quoted phrases are ok with
+probabilisitic prefixes such as **to:**, **from:**, and **subject:**. In particular
+
+::
+
+   subject:(pizza free)
+
+is equivalent to
+
+::
+
+   subject:pizza and subject:free
+
+Both of these will match a subject "Free Delicious Pizza" while
+
+::
+
+   subject:"pizza free"
+
+will not.
 
 DATE AND TIME SEARCH
 ====================
