@@ -173,11 +173,7 @@ Subject: Test mbox message 1
 Body.
 EOF
 output=$(NOTMUCH_NEW 2>&1)
-test_expect_equal "$output" \
-"Warning: ${MAIL_DIR}/mbox_file1 is an mbox containing a single message,
-likely caused by misconfigured mail delivery.  Support for single-message
-mboxes is deprecated and may be removed in the future.
-Added 1 new message to the database."
+test_expect_equal "$output" "Added 1 new message to the database."
 
 # This test requires that notmuch new has been run at least once.
 test_begin_subtest "Skip and report non-mail files"
@@ -279,5 +275,12 @@ test_expect_code 1 "Invalid tags set exit code" \
     "NOTMUCH_NEW 2>&1"
 
 notmuch config set new.tags $OLDCONFIG
+
+
+test_begin_subtest "Xapian exception: read only files"
+chmod u-w  ${MAIL_DIR}/.notmuch/xapian/*.DB
+output=$(NOTMUCH_NEW 2>&1 | sed 's/: .*$//' )
+chmod u+w  ${MAIL_DIR}/.notmuch/xapian/*.DB
+test_expect_equal "$output" "A Xapian exception occurred opening database"
 
 test_done

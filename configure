@@ -21,6 +21,7 @@ srcdir=$(dirname "$0")
 
 subdirs="util compat lib parse-time-string completion doc emacs"
 subdirs="${subdirs} performance-test test test/test-databases"
+subdirs="${subdirs} bindings"
 
 # For a non-srcdir configure invocation (such as ../configure), create
 # the directory structure and copy Makefiles.
@@ -47,9 +48,11 @@ CC=${CC:-cc}
 CXX=${CXX:-c++}
 CFLAGS=${CFLAGS:--g -O2}
 CPPFLAGS=${CPPFLAGS:-}
+CXXFLAGS_for_sh=${CXXFLAGS:-${CFLAGS}}
 CXXFLAGS=${CXXFLAGS:-\$(CFLAGS)}
 LDFLAGS=${LDFLAGS:-}
 XAPIAN_CONFIG=${XAPIAN_CONFIG:-xapian-config}
+PYTHON=${PYTHON:-}
 
 # We don't allow the EMACS or GZIP Makefile variables inherit values
 # from the environment as we do with CC and CXX above. The reason is
@@ -269,6 +272,35 @@ dependencies are available:
 EOF
 
 errors=0
+printf "int main(void){return 0;}\n" > minimal.c
+
+printf "Sanity checking C compilation environment... "
+if ${CC} ${CFLAGS} ${CPPFLAGS} minimal.c ${LDFLAGS} -o minimal > /dev/null 2>&1
+then
+    printf "OK.\n"
+else
+    printf "Fail.\n"
+    errors=$((errors + 1))
+fi
+
+printf "Sanity checking C++ compilation environment... "
+if ${CXX} ${CXXFLAGS_for_sh} ${CPPFLAGS} minimal.c ${LDFLAGS} -o minimal > /dev/null 2>&1
+then
+    printf "OK.\n"
+else
+    printf "Fail.\n"
+    errors=$((errors + 1))
+fi
+
+if [ $errors -gt 0 ]; then
+    cat <<EOF
+*** Error: Initial sanity checking of environment failed.  Please try
+running configure in a clean environment, and if the problem persists,
+report a bug.
+EOF
+    rm -f minimal minimal.c
+    exit 1
+fi
 
 if pkg-config --version > /dev/null 2>&1; then
     have_pkg_config=1
@@ -374,6 +406,23 @@ else
     errors=$((errors + 1))
 fi
 
+printf "Checking for python... "
+have_python=0
+
+for name in ${PYTHON} python python2 python3; do
+    if command -v $name > /dev/null; then
+	have_python=1
+	python=$name
+	printf "Yes ($name).\n"
+	break
+    fi
+done
+
+if [ $have_python -eq 0 ]; then
+    printf "No.\n"
+    errors=$((errors + 1))
+fi
+
 printf "Checking for valgrind development files... "
 if pkg-config --exists valgrind; then
     printf "Yes.\n"
@@ -418,7 +467,7 @@ else
 fi
 
 printf "Checking if doxygen is available... "
-if command -v doxygen > /dev/null 2>&1; then
+if command -v doxygen > /dev/null; then
     printf "Yes.\n"
     have_doxygen=1
 else
@@ -426,23 +475,22 @@ else
     have_doxygen=0
 fi
 
+printf "Checking for ruby development files... "
+if ruby -e "require 'mkmf'"> /dev/null 2>&1; then
+    printf "Yes.\n"
+    have_ruby_dev=1
+else
+    printf "No (skipping ruby bindings)\n"
+    have_ruby_dev=0
+fi
+
 printf "Checking if sphinx is available and supports nroff output... "
-if hash sphinx-build > /dev/null 2>&1 && python -m sphinx.writers.manpage > /dev/null 2>&1 ; then
+if command -v sphinx-build > /dev/null && ${python} -m sphinx.writers.manpage > /dev/null 2>&1 ; then
     printf "Yes.\n"
     have_sphinx=1
-    have_rst2man=0
 else
-    printf "No (falling back to rst2man).\n"
+    printf "No (so will not install man pages).\n"
     have_sphinx=0
-
-    printf "Checking if rst2man is available... "
-    if rst2man -V > /dev/null 2>&1; then
-       printf "Yes.\n"
-       have_rst2man=1
-    else
-       printf "No (so will not install man pages).\n"
-       have_rst2man=0
-    fi
 fi
 
 libdir_in_ldconfig=0
@@ -522,6 +570,9 @@ need to install the following packages before being able to compile
 notmuch:
 
 EOF
+    if [ $have_python -eq 0 ]; then
+	echo "  python interpreter"
+    fi
     if [ $have_xapian -eq 0 ]; then
 	echo "	Xapian library (including development files such as headers)"
 	echo "	http://xapian.org/"
@@ -680,8 +731,6 @@ else
 fi
 rm -f compat/check_asctime
 
-printf "int main(void){return 0;}\n" > minimal.c
-
 printf "Checking for rpath support... "
 if ${CC} -Wl,--enable-new-dtags -Wl,-rpath,/tmp/ -o minimal minimal.c >/dev/null 2>&1
 then
@@ -700,6 +749,16 @@ then
 else
     printf "No (nothing to worry about).\n"
     as_needed_ldflags=""
+fi
+
+printf "Checking for -Wl,--no-undefined... "
+if ${CC} -Wl,--no-undefined -o minimal minimal.c >/dev/null 2>&1
+then
+    printf "Yes.\n"
+    no_undefined_ldflags="-Wl,--no-undefined"
+else
+    printf "No (nothing to worry about).\n"
+    no_undefined_ldflags=""
 fi
 
 WARN_CXXFLAGS=""
@@ -787,6 +846,9 @@ WARN_CXXFLAGS=${WARN_CXXFLAGS}
 # Flags to enable warnings when using the C compiler
 WARN_CFLAGS=${WARN_CFLAGS}
 
+# Name of python interpreter
+PYTHON = ${python}
+
 # The prefix to which notmuch should be installed
 # Note: If you change this value here, be sure to ensure that the
 # LIBDIR_IN_LDCONFIG value below is still set correctly.
@@ -825,9 +887,6 @@ HAVE_EMACS = ${have_emacs}
 # Whether there's a sphinx-build binary available for building documentation
 HAVE_SPHINX=${have_sphinx}
 
-# Whether there's a rst2man binary available for building documentation
-HAVE_RST2MAN=${have_rst2man}
-
 # Whether there's a doxygen binary available for building api documentation
 HAVE_DOXYGEN=${have_doxygen}
 
@@ -847,6 +906,10 @@ HAVE_CANONICALIZE_FILE_NAME = ${have_canonicalize_file_name}
 # Whether the getline function is available (if not, then notmuch will
 # build its own version)
 HAVE_GETLINE = ${have_getline}
+
+# Are the ruby development files (and ruby) available? If not skip
+# building/testing ruby bindings.
+HAVE_RUBY_DEV = ${have_ruby_dev}
 
 # Whether the strcasestr function is available (if not, then notmuch will
 # build its own version)
@@ -902,6 +965,9 @@ RPATH_LDFLAGS = ${rpath_ldflags}
 # Flags needed to have linker link only to necessary libraries
 AS_NEEDED_LDFLAGS = ${as_needed_ldflags}
 
+# Flags to have the linker flag undefined symbols in object files
+NO_UNDEFINED_LDFLAGS = ${no_undefined_ldflags}
+
 # Whether valgrind header files are available
 HAVE_VALGRIND = ${have_valgrind}
 
@@ -955,9 +1021,15 @@ cat > sh.config <<EOF
 # Whether the Xapian version in use supports compaction
 NOTMUCH_HAVE_XAPIAN_COMPACT=${have_xapian_compact}
 
-# Whether there's either sphinx or rst2man available for building
-# documentation
-NOTMUCH_HAVE_MAN=$((have_sphinx || have_rst2man))
+# do we have man pages?
+NOTMUCH_HAVE_MAN=$((have_sphinx))
+
+# Name of python interpreter
+NOTMUCH_PYTHON=${python}
+
+# Are the ruby development files (and ruby) available? If not skip
+# building/testing ruby bindings.
+NOTMUCH_HAVE_RUBY_DEV=${have_ruby_dev}
 EOF
 
 # Finally, after everything configured, inform the user how to continue.

@@ -11,7 +11,7 @@ LIBNOTMUCH_VERSION_MAJOR = 4
 # the time of release for any additions to the library interface,
 # (and when it is incremented, the release version of the library should
 #  be reset to 0).
-LIBNOTMUCH_VERSION_MINOR = 1
+LIBNOTMUCH_VERSION_MINOR = 2
 
 # The release version the library interface. This should be incremented at
 # the time of release if there have been no changes to the interface, (but
@@ -27,13 +27,13 @@ LIBRARY_SUFFIX = dylib
 LINKER_NAME = libnotmuch.$(LIBRARY_SUFFIX)
 SONAME = libnotmuch.$(LIBNOTMUCH_VERSION_MAJOR).$(LIBRARY_SUFFIX)
 LIBNAME = libnotmuch.$(LIBNOTMUCH_VERSION_MAJOR).$(LIBNOTMUCH_VERSION_MINOR).$(LIBNOTMUCH_VERSION_RELEASE).$(LIBRARY_SUFFIX)
-LIBRARY_LINK_FLAG = -dynamiclib -install_name $(SONAME) -compatibility_version $(LIBNOTMUCH_VERSION_MAJOR).$(LIBNOTMUCH_VERSION_MINOR) -current_version $(LIBNOTMUCH_VERSION_MAJOR).$(LIBNOTMUCH_VERSION_MINOR).$(LIBNOTMUCH_VERSION_RELEASE)
+LIBRARY_LINK_FLAG = -dynamiclib -install_name $(libdir)/$(SONAME) -compatibility_version $(LIBNOTMUCH_VERSION_MAJOR).$(LIBNOTMUCH_VERSION_MINOR) -current_version $(LIBNOTMUCH_VERSION_MAJOR).$(LIBNOTMUCH_VERSION_MINOR).$(LIBNOTMUCH_VERSION_RELEASE)
 else
 LIBRARY_SUFFIX = so
 LINKER_NAME = libnotmuch.$(LIBRARY_SUFFIX)
 SONAME = $(LINKER_NAME).$(LIBNOTMUCH_VERSION_MAJOR)
 LIBNAME = $(SONAME).$(LIBNOTMUCH_VERSION_MINOR).$(LIBNOTMUCH_VERSION_RELEASE)
-LIBRARY_LINK_FLAG = -shared -Wl,--version-script=notmuch.sym,-soname=$(SONAME) -Wl,--no-undefined
+LIBRARY_LINK_FLAG = -shared -Wl,--version-script=notmuch.sym,-soname=$(SONAME) $(NO_UNDEFINED_LDFLAGS)
 ifeq ($(PLATFORM),OPENBSD)
 LIBRARY_LINK_FLAG += -lc
 endif

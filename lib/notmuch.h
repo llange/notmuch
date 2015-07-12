@@ -56,7 +56,7 @@ NOTMUCH_BEGIN_DECLS
  * version in Makefile.local.
  */
 #define LIBNOTMUCH_MAJOR_VERSION	4
-#define LIBNOTMUCH_MINOR_VERSION	1
+#define LIBNOTMUCH_MINOR_VERSION	2
 #define LIBNOTMUCH_MICRO_VERSION	0
 
 #endif /* __DOXYGEN__ */
@@ -164,6 +164,11 @@ typedef enum _notmuch_status {
      */
     NOTMUCH_STATUS_UPGRADE_REQUIRED,
     /**
+     * There is a problem with the proposed path, e.g. a relative path
+     * passed to a function expecting an absolute path.
+     */
+    NOTMUCH_STATUS_PATH_ERROR,
+    /**
      * Not an actual status value. Just a way to find out how many
      * valid status values there are.
      */
@@ -230,6 +235,16 @@ notmuch_status_t
 notmuch_database_create (const char *path, notmuch_database_t **database);
 
 /**
+ * Like notmuch_database_create, except optionally return an error
+ * message. This message is allocated by malloc and should be freed by
+ * the caller.
+ */
+notmuch_status_t
+notmuch_database_create_verbose (const char *path,
+				 notmuch_database_t **database,
+				 char **error_message);
+
+/**
  * Database open mode for notmuch_database_open.
  */
 typedef enum {
@@ -279,6 +294,24 @@ notmuch_status_t
 notmuch_database_open (const char *path,
 		       notmuch_database_mode_t mode,
 		       notmuch_database_t **database);
+/**
+ * Like notmuch_database_open, except optionally return an error
+ * message. This message is allocated by malloc and should be freed by
+ * the caller.
+ */
+
+notmuch_status_t
+notmuch_database_open_verbose (const char *path,
+			       notmuch_database_mode_t mode,
+			       notmuch_database_t **database,
+			       char **error_message);
+
+/**
+ * Retrieve last status string for given database.
+ *
+ */
+const char *
+notmuch_database_status_string (notmuch_database_t *notmuch);
 
 /**
  * Commit changes and close the given notmuch database.
@@ -780,9 +813,17 @@ notmuch_query_add_tag_exclude (notmuch_query_t *query, const char *tag);
  * to call it if the query is about to be destroyed).
  *
  * If a Xapian exception occurs this function will return NULL.
+ * For better error reporting, use the _st variant.
  */
 notmuch_threads_t *
 notmuch_query_search_threads (notmuch_query_t *query);
+
+/**
+ * Like notmuch_query_search_threads, but with a status return.
+ */
+notmuch_status_t
+notmuch_query_search_threads_st (notmuch_query_t *query,
+				 notmuch_threads_t **out);
 
 /**
  * Execute a query for messages, returning a notmuch_messages_t object
@@ -822,9 +863,17 @@ notmuch_query_search_threads (notmuch_query_t *query);
  * reason to call it if the query is about to be destroyed).
  *
  * If a Xapian exception occurs this function will return NULL.
+ * For better error reporting, use the _st variant.
  */
 notmuch_messages_t *
 notmuch_query_search_messages (notmuch_query_t *query);
+
+/**
+ * Like notmuch_query_search_messages, but with a status return.
+ */
+notmuch_status_t
+notmuch_query_search_messages_st (notmuch_query_t *query,
+				  notmuch_messages_t **out);
 
 /**
  * Destroy a notmuch_query_t along with any associated resources.
@@ -893,10 +942,10 @@ void
 notmuch_threads_destroy (notmuch_threads_t *threads);
 
 /**
- * Return an estimate of the number of messages matching a search.
+ * Return the number of messages matching a search.
  *
- * This function performs a search and returns Xapian's best
- * guess as to number of matching messages.
+ * This function performs a search and returns the number of matching
+ * messages.
  *
  * If a Xapian exception occurs, this function may return 0 (after
  * printing a message).

@@ -64,15 +64,14 @@ NOTMUCH_BEGIN_DECLS
     strncmp ((var), (literal), sizeof (literal) - 1)
 
 /* Robust bit test/set/reset macros */
+#define _NOTMUCH_VALID_BIT(bit) \
+    ((bit) >= 0 && ((unsigned long) bit) < CHAR_BIT * sizeof (unsigned long long))
 #define NOTMUCH_TEST_BIT(val, bit) \
-    (((bit) < 0 || (bit) >= CHAR_BIT * sizeof (unsigned long long)) ? 0	\
-     : !!((val) & (1ull << (bit))))
+    (_NOTMUCH_VALID_BIT(bit) ? !!((val) & (1ull << (bit))) : 0)
 #define NOTMUCH_SET_BIT(valp, bit) \
-    (((bit) < 0 || (bit) >= CHAR_BIT * sizeof (unsigned long long)) ? *(valp) \
-     : (*(valp) |= (1ull << (bit))))
+    (_NOTMUCH_VALID_BIT(bit) ? (*(valp) |= (1ull << (bit))) : *(valp))
 #define NOTMUCH_CLEAR_BIT(valp,  bit) \
-    (((bit) < 0 || (bit) >= CHAR_BIT * sizeof (unsigned long long)) ? *(valp) \
-     : (*(valp) &= ~(1ull << (bit))))
+    (_NOTMUCH_VALID_BIT(bit) ? (*(valp) &= ~(1ull << (bit))) : *(valp))
 
 #define unused(x) x __attribute__ ((unused))
 
@@ -190,6 +189,10 @@ _notmuch_message_id_compressed (void *ctx, const char *message_id);
 
 notmuch_status_t
 _notmuch_database_ensure_writable (notmuch_database_t *notmuch);
+
+void
+_notmuch_database_log (notmuch_database_t *notmuch,
+		       const char *format, ...);
 
 const char *
 _notmuch_database_relative_path (notmuch_database_t *notmuch,
@@ -355,11 +358,12 @@ typedef struct _notmuch_message_file notmuch_message_file_t;
  * Returns NULL if any error occurs.
  */
 notmuch_message_file_t *
-_notmuch_message_file_open (const char *filename);
+_notmuch_message_file_open (notmuch_database_t *notmuch, const char *filename);
 
 /* Like notmuch_message_file_open but with 'ctx' as the talloc owner. */
 notmuch_message_file_t *
-_notmuch_message_file_open_ctx (void *ctx, const char *filename);
+_notmuch_message_file_open_ctx (notmuch_database_t *notmuch,
+				void *ctx, const char *filename);
 
 /* Close a notmuch message previously opened with notmuch_message_open. */
 void
@@ -469,6 +473,8 @@ _notmuch_doc_id_set_remove (notmuch_doc_id_set_t *doc_ids,
 void
 _notmuch_message_add_reply (notmuch_message_t *message,
 			    notmuch_message_t *reply);
+notmuch_database_t *
+_notmuch_message_database (notmuch_message_t *message);
 
 /* sha1.c */
 

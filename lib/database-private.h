@@ -92,6 +92,14 @@ enum _notmuch_features {
      *
      * Introduced: version 3. */
     NOTMUCH_FEATURE_GHOSTS = 1 << 4,
+
+
+    /* If set, then the database was created after the introduction of
+     * indexed mime types. If unset, then the database may contain a
+     * mixture of messages with indexed and non-indexed mime types.
+     *
+     * Introduced: version 3. */
+    NOTMUCH_FEATURE_INDEXED_MIMETYPES = 1 << 5,
 };
 
 /* In C++, a named enum is its own type, so define bitwise operators
@@ -146,6 +154,10 @@ struct _notmuch_database {
     unsigned int last_doc_id;
     uint64_t last_thread_id;
 
+    /* error reporting; this value persists only until the
+     * next library call. May be NULL */
+    char *status_string;
+
     Xapian::QueryParser *query_parser;
     Xapian::TermGenerator *term_gen;
     Xapian::ValueRangeProcessor *value_range_processor;
@@ -161,9 +173,10 @@ struct _notmuch_database {
 
 /* Current database features.  If any of these are missing from a
  * database, request an upgrade.
- * NOTMUCH_FEATURE_FROM_SUBJECT_ID_VALUES is not included because
- * upgrade doesn't currently introduce the feature (though brand new
- * databases will have it). */
+ * NOTMUCH_FEATURE_FROM_SUBJECT_ID_VALUES and
+ * NOTMUCH_FEATURE_INDEXED_MIMETYPES are not included because upgrade
+ * doesn't currently introduce the features (though brand new databases
+ * will have it). */
 #define NOTMUCH_FEATURES_CURRENT \
     (NOTMUCH_FEATURE_FILE_TERMS | NOTMUCH_FEATURE_DIRECTORY_DOCS | \
      NOTMUCH_FEATURE_BOOL_FOLDER | NOTMUCH_FEATURE_GHOSTS)

@@ -99,6 +99,13 @@ visible for any given message."
   :group 'notmuch-show
   :group 'notmuch-hooks)
 
+(defcustom notmuch-show-max-text-part-size 10000
+  "Maximum size of a text part to be shown by default in characters.
+
+Set to 0 to show the part regardless of size."
+  :type 'integer
+  :group 'notmuch-show)
+
 ;; Mostly useful for debugging.
 (defcustom notmuch-show-all-multipart/alternative-parts nil
   "Should all parts of multipart/alternative parts be shown?"
@@ -134,6 +141,13 @@ indentation."
 (defcustom notmuch-show-only-matching-messages nil
   "Only matching messages are shown by default."
   :type 'boolean
+  :group 'notmuch-show)
+
+;; By default, block all external images to prevent privacy leaks and
+;; potential attacks.
+(defcustom notmuch-show-text/html-blocked-images "."
+  "Remote images that have URLs matching this regexp will be blocked."
+  :type '(choice (const nil) regexp)
   :group 'notmuch-show)
 
 (defvar notmuch-show-thread-id nil)
@@ -241,9 +255,9 @@ every user interaction with notmuch."
        (let ((buf (generate-new-buffer (concat "*notmuch-msg-" id "*"))))
          (with-current-buffer buf
 	   (let ((coding-system-for-read 'no-conversion))
-	     (call-process notmuch-command nil t nil "show" "--format=raw" id)
-	     ,@body)
-	   (kill-buffer buf))))))
+	     (call-process notmuch-command nil t nil "show" "--format=raw" id))
+	   ,@body)
+	 (kill-buffer buf)))))
 
 (defun notmuch-show-turn-on-visual-line-mode ()
   "Enable Visual Line mode."
@@ -525,6 +539,73 @@ message at DEPTH in the current thread."
 	  (overlay-put overlay 'invisible (not show))
 	  t)))))
 
+;; Part content ID handling
+
+(defvar notmuch-show--cids nil
+  "Alist from raw content ID to (MSG PART).")
+(make-variable-buffer-local 'notmuch-show--cids)
+
+(defun notmuch-show--register-cids (msg part)
+  "Register content-IDs in PART and all of PART's sub-parts."
+  (let ((content-id (plist-get part :content-id)))
+    (when content-id
+      ;; Note that content-IDs are globally unique, except when they
+      ;; aren't: RFC 2046 section 5.1.4 permits children of a
+      ;; multipart/alternative to have the same content-ID, in which
+      ;; case the MUA is supposed to pick the best one it can render.
+      ;; We simply add the content-ID to the beginning of our alist;
+      ;; so if this happens, we'll take the last (and "best")
+      ;; alternative (even if we can't render it).
+      (push (list content-id msg part) notmuch-show--cids)))
+  ;; Recurse on sub-parts
+  (let ((ctype (notmuch-split-content-type
+		(downcase (plist-get part :content-type)))))
+    (cond ((equal (first ctype) "multipart")
+	   (mapc (apply-partially #'notmuch-show--register-cids msg)
+		 (plist-get part :content)))
+	  ((equal ctype '("message" "rfc822"))
+	   (notmuch-show--register-cids
+	    msg
+	    (first (plist-get (first (plist-get part :content)) :body)))))))
+
+(defun notmuch-show--get-cid-content (cid)
+  "Return a list (CID-content content-type) or nil.
+
+This will only find parts from messages that have been inserted
+into the current buffer.  CID must be a raw content ID, without
+enclosing angle brackets, a cid: prefix, or URL encoding.  This
+will return nil if the CID is unknown or cannot be retrieved."
+  (let ((descriptor (cdr (assoc cid notmuch-show--cids))))
+    (when descriptor
+      (let* ((msg (first descriptor))
+	     (part (second descriptor))
+	     ;; Request caching for this content, as some messages
+	     ;; reference the same cid: part many times (hundreds!).
+	     (content (notmuch-get-bodypart-binary
+		       msg part notmuch-show-process-crypto 'cache))
+	     (content-type (plist-get part :content-type)))
+	(list content content-type)))))
+
+(defun notmuch-show-setup-w3m ()
+  "Instruct w3m how to retrieve content from a \"related\" part of a message."
+  (interactive)
+  (if (boundp 'w3m-cid-retrieve-function-alist)
+    (unless (assq 'notmuch-show-mode w3m-cid-retrieve-function-alist)
+      (push (cons 'notmuch-show-mode #'notmuch-show--cid-w3m-retrieve)
+	    w3m-cid-retrieve-function-alist)))
+  (setq mm-inline-text-html-with-images t))
+
+(defvar w3m-current-buffer) ;; From `w3m.el'.
+(defun notmuch-show--cid-w3m-retrieve (url &rest args)
+  ;; url includes the cid: prefix and is URL encoded (see RFC 2392).
+  (let* ((cid (url-unhex-string (substring url 4)))
+	 (content-and-type
+	  (with-current-buffer w3m-current-buffer
+	    (notmuch-show--get-cid-content cid))))
+    (when content-and-type
+      (insert (first content-and-type))
+      (second content-and-type))))
+
 ;; MIME part renderers
 
 (defun notmuch-show-multipart/*-to-list (part)
@@ -549,78 +630,11 @@ message at DEPTH in the current thread."
       (indent-rigidly start (point) 1)))
   t)
 
-(defun notmuch-show-setup-w3m ()
-  "Instruct w3m how to retrieve content from a \"related\" part of a message."
-  (interactive)
-  (if (boundp 'w3m-cid-retrieve-function-alist)
-    (unless (assq 'notmuch-show-mode w3m-cid-retrieve-function-alist)
-      (push (cons 'notmuch-show-mode 'notmuch-show-w3m-cid-retrieve)
-	    w3m-cid-retrieve-function-alist)))
-  (setq mm-inline-text-html-with-images t))
-
-(defvar w3m-current-buffer) ;; From `w3m.el'.
-(defvar notmuch-show-w3m-cid-store nil)
-(make-variable-buffer-local 'notmuch-show-w3m-cid-store)
-
-(defun notmuch-show-w3m-cid-store-internal (content-id
-					    message-id
-					    part-number
-					    content-type
-					    content)
-  (push (list content-id
-	      message-id
-	      part-number
-	      content-type
-	      content)
-	notmuch-show-w3m-cid-store))
-
-(defun notmuch-show-w3m-cid-store (msg part)
-  (let ((content-id (plist-get part :content-id)))
-    (when content-id
-      (notmuch-show-w3m-cid-store-internal (concat "cid:" content-id)
-					   (plist-get msg :id)
-					   (plist-get part :id)
-					   (plist-get part :content-type)
-					   nil))))
-
-(defun notmuch-show-w3m-cid-retrieve (url &rest args)
-  (let ((matching-part (with-current-buffer w3m-current-buffer
-			 (assoc url notmuch-show-w3m-cid-store))))
-    (if matching-part
-	(let ((message-id (nth 1 matching-part))
-	      (part-number (nth 2 matching-part))
-	      (content-type (nth 3 matching-part))
-	      (content (nth 4 matching-part)))
-	  ;; If we don't already have the content, get it and cache
-	  ;; it, as some messages reference the same cid: part many
-	  ;; times (hundreds!), which results in many calls to
-	  ;; `notmuch part'.
-	  (unless content
-	    (setq content (notmuch-get-bodypart-internal (notmuch-id-to-query message-id)
-							      part-number notmuch-show-process-crypto))
-	    (with-current-buffer w3m-current-buffer
-	      (notmuch-show-w3m-cid-store-internal url
-						   message-id
-						   part-number
-						   content-type
-						   content)))
-	  (insert content)
-	  content-type)
-      nil)))
-
 (defun notmuch-show-insert-part-multipart/related (msg part content-type nth depth button)
   (let ((inner-parts (plist-get part :content))
 	(start (point)))
 
-    ;; We assume that the first part is text/html and the remainder
-    ;; things that it references.
-
-    ;; Stash the non-primary parts.
-    (mapc (lambda (part)
-	    (notmuch-show-w3m-cid-store msg part))
-	  (cdr inner-parts))
-
-    ;; Render the primary part.
+    ;; Render the primary part.  FIXME: Support RFC 2387 Start header.
     (notmuch-show-insert-bodypart msg (car inner-parts) depth)
     ;; Add hidden buttons for the rest
     (mapc (lambda (inner-part)
@@ -717,7 +731,7 @@ message at DEPTH in the current thread."
   (let ((start (if button
 		   (button-start button)
 		 (point))))
-    (insert (notmuch-get-bodypart-content msg part notmuch-show-process-crypto))
+    (insert (notmuch-get-bodypart-text msg part notmuch-show-process-crypto))
     (save-excursion
       (save-restriction
 	(narrow-to-region start (point-max))
@@ -726,9 +740,9 @@ message at DEPTH in the current thread."
 
 (defun notmuch-show-insert-part-text/calendar (msg part content-type nth depth button)
   (insert (with-temp-buffer
-	    (insert (notmuch-get-bodypart-content msg part notmuch-show-process-crypto))
-	    ;; notmuch-get-bodypart-content provides "raw", non-converted
-	    ;; data. Replace CRLF with LF before icalendar can use it.
+	    (insert (notmuch-get-bodypart-text msg part notmuch-show-process-crypto))
+	    ;; notmuch-get-bodypart-text does no newline conversion.
+	    ;; Replace CRLF with LF before icalendar can use it.
 	    (goto-char (point-min))
 	    (while (re-search-forward "\r\n" nil t)
 	      (replace-match "\n" nil nil))
@@ -767,14 +781,46 @@ message at DEPTH in the current thread."
 	  nil))))
 
 (defun notmuch-show-insert-part-text/html (msg part content-type nth depth button)
-  ;; text/html handler to work around bugs in renderers and our
-  ;; invisibile parts code. In particular w3m sets up a keymap which
-  ;; "leaks" outside the invisible region and causes strange effects
-  ;; in notmuch. We set mm-inline-text-html-with-w3m-keymap to nil to
-  ;; tell w3m not to set a keymap (so the normal notmuch-show-mode-map
-  ;; remains).
-  (let ((mm-inline-text-html-with-w3m-keymap nil))
-    (notmuch-show-insert-part-*/* msg part content-type nth depth button)))
+  (if (eq mm-text-html-renderer 'shr)
+      ;; It's easier to drive shr ourselves than to work around the
+      ;; goofy things `mm-shr' does (like irreversibly taking over
+      ;; content ID handling).
+
+      ;; FIXME: If we block an image, offer a button to load external
+      ;; images.
+      (let ((shr-blocked-images notmuch-show-text/html-blocked-images))
+	(notmuch-show--insert-part-text/html-shr msg part))
+    ;; Otherwise, let message-mode do the heavy lifting
+    ;;
+    ;; w3m sets up a keymap which "leaks" outside the invisible region
+    ;; and causes strange effects in notmuch. We set
+    ;; mm-inline-text-html-with-w3m-keymap to nil to tell w3m not to
+    ;; set a keymap (so the normal notmuch-show-mode-map remains).
+    (let ((mm-inline-text-html-with-w3m-keymap nil)
+	  ;; FIXME: If we block an image, offer a button to load external
+	  ;; images.
+	  (gnus-blocked-images notmuch-show-text/html-blocked-images))
+      (notmuch-show-insert-part-*/* msg part content-type nth depth button))))
+
+;; These functions are used by notmuch-show--insert-part-text/html-shr
+(declare-function libxml-parse-html-region "xml.c")
+(declare-function shr-insert-document "shr")
+
+(defun notmuch-show--insert-part-text/html-shr (msg part)
+  ;; Make sure shr is loaded before we start let-binding its globals
+  (require 'shr)
+  (let ((dom (let ((process-crypto notmuch-show-process-crypto))
+	       (with-temp-buffer
+		 (insert (notmuch-get-bodypart-text msg part process-crypto))
+		 (libxml-parse-html-region (point-min) (point-max)))))
+	(shr-content-function
+	 (lambda (url)
+	   ;; shr strips the "cid:" part of URL, but doesn't
+	   ;; URL-decode it (see RFC 2392).
+	   (let ((cid (url-unhex-string url)))
+	     (first (notmuch-show--get-cid-content cid))))))
+    (shr-insert-document dom)
+    t))
 
 (defun notmuch-show-insert-part-*/* (msg part content-type nth depth button)
   ;; This handler _must_ succeed - it is the handler of last resort.
@@ -898,14 +944,20 @@ useful for quoting in replies)."
 			     "text/x-diff")
 			content-type))
 	 (nth (plist-get part :id))
+	 (long (and (notmuch-match-content-type mime-type "text/*")
+		    (> notmuch-show-max-text-part-size 0)
+		    (> (length (plist-get part :content)) notmuch-show-max-text-part-size)))
 	 (beg (point))
-	 ;; Hide the part initially if HIDE is t.
-	 (show-part (not (equal hide t)))
 	 ;; We omit the part button for the first (or only) part if
 	 ;; this is text/plain, or HIDE is 'no-buttons.
 	 (button (unless (or (equal hide 'no-buttons)
 			     (and (string= mime-type "text/plain") (<= nth 1)))
 		   (notmuch-show-insert-part-header nth mime-type content-type (plist-get part :filename))))
+	 ;; Hide the part initially if HIDE is t, or if it is too long
+	 ;; and we have a button to allow toggling (thus reply which
+	 ;; uses 'no-buttons automatically includes long parts)
+	 (show-part (not (or (equal hide t)
+			     (and long button))))
 	 (content-beg (point)))
 
     ;; Store the computed mime-type for later use (e.g. by attachment handlers).
@@ -932,6 +984,12 @@ useful for quoting in replies)."
 
 (defun notmuch-show-insert-body (msg body depth)
   "Insert the body BODY at depth DEPTH in the current thread."
+
+  ;; Register all content IDs for this message.  According to RFC
+  ;; 2392, content IDs are *global*, but it's okay if an MUA treats
+  ;; them as only global within a message.
+  (notmuch-show--register-cids msg (first body))
+
   (mapc (lambda (part) (notmuch-show-insert-bodypart msg part depth)) body))
 
 (defun notmuch-show-make-symbol (type)
@@ -1198,7 +1256,11 @@ function is used."
       (notmuch-show-mapc (lambda () (notmuch-show-set-prop :orig-tags (notmuch-show-get-tags))))
 
       ;; Set the header line to the subject of the first message.
-      (setq header-line-format (notmuch-sanitize (notmuch-show-strip-re (notmuch-show-get-subject))))
+      (setq header-line-format
+	    (replace-regexp-in-string "%" "%%"
+			    (notmuch-sanitize
+			     (notmuch-show-strip-re
+			      (notmuch-show-get-subject)))))
 
       (run-hooks 'notmuch-show-hook))))
 
@@ -1280,6 +1342,7 @@ reset based on the original query."
     (define-key map "t" 'notmuch-show-stash-to)
     (define-key map "l" 'notmuch-show-stash-mlarchive-link)
     (define-key map "L" 'notmuch-show-stash-mlarchive-link-and-go)
+    (define-key map "G" 'notmuch-show-stash-git-send-email)
     (define-key map "?" 'notmuch-subkeymap-help)
     map)
   "Submap for stash commands")
@@ -2131,17 +2194,53 @@ the user (see `notmuch-show-stash-mlarchive-link-alist')."
   (notmuch-show-stash-mlarchive-link mla)
   (browse-url (current-kill 0 t)))
 
+(defun notmuch-show-stash-git-helper (addresses prefix)
+  "Escape, trim, quote, and add PREFIX to each address in list of ADDRESSES, and return the result as a single string."
+  (mapconcat (lambda (x)
+	       (concat prefix "\""
+		       ;; escape double-quotes
+		       (replace-regexp-in-string
+			"\"" "\\\\\""
+			;; trim leading and trailing spaces
+			(replace-regexp-in-string
+			 "\\(^ *\\| *$\\)" ""
+			 x)) "\""))
+	     addresses " "))
+
+(put 'notmuch-show-stash-git-send-email 'notmuch-prefix-doc
+     "Copy From/To/Cc of current message to kill-ring in a form suitable for pasting to git send-email command line.")
+
+(defun notmuch-show-stash-git-send-email (&optional no-in-reply-to)
+  "Copy From/To/Cc/Message-Id of current message to kill-ring in a form suitable for pasting to git send-email command line.
+
+If invoked with a prefix argument (or NO-IN-REPLY-TO is non-nil),
+omit --in-reply-to=<Message-Id>."
+  (interactive "P")
+  (notmuch-common-do-stash
+   (mapconcat 'identity
+	      (remove ""
+		      (list
+		       (notmuch-show-stash-git-helper
+			(message-tokenize-header (notmuch-show-get-from)) "--to=")
+		       (notmuch-show-stash-git-helper
+			(message-tokenize-header (notmuch-show-get-to)) "--to=")
+		       (notmuch-show-stash-git-helper
+			(message-tokenize-header (notmuch-show-get-cc)) "--cc=")
+		       (unless no-in-reply-to
+			 (notmuch-show-stash-git-helper
+			  (list (notmuch-show-get-message-id t)) "--in-reply-to="))))
+	      " ")))
+
 ;; Interactive part functions and their helpers
 
-(defun notmuch-show-generate-part-buffer (message-id nth)
+(defun notmuch-show-generate-part-buffer (msg part)
   "Return a temporary buffer containing the specified part's content."
   (let ((buf (generate-new-buffer " *notmuch-part*"))
 	(process-crypto notmuch-show-process-crypto))
     (with-current-buffer buf
-      (setq notmuch-show-process-crypto process-crypto)
-      ;; Always acquires the part via `notmuch part', even if it is
-      ;; available in the SEXP output.
-      (insert (notmuch-get-bodypart-internal message-id nth notmuch-show-process-crypto)))
+      ;; This is always used in the content of mm handles, which
+      ;; expect undecoded, binary part content.
+      (insert (notmuch-get-bodypart-binary msg part process-crypto)))
     buf))
 
 (defun notmuch-show-current-part-handle ()
@@ -2149,10 +2248,9 @@ the user (see `notmuch-show-stash-mlarchive-link-alist')."
 
 This creates a temporary buffer for the part's content; the
 caller is responsible for killing this buffer as appropriate."
-  (let* ((part (notmuch-show-get-part-properties))
-	 (message-id (notmuch-show-get-message-id))
-	 (nth (plist-get part :id))
-	 (buf (notmuch-show-generate-part-buffer message-id nth))
+  (let* ((msg (notmuch-show-get-message-properties))
+	 (part (notmuch-show-get-part-properties))
+	 (buf (notmuch-show-generate-part-buffer msg part))
 	 (computed-type (plist-get part :computed-type))
 	 (filename (plist-get part :filename))
 	 (disposition (if filename `(attachment (filename . ,filename)))))

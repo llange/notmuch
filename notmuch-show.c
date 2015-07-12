@@ -1082,7 +1082,8 @@ notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
 	.output_body = TRUE,
 	.crypto = {
 	    .verify = FALSE,
-	    .decrypt = FALSE
+	    .decrypt = FALSE,
+	    .gpgpath = NULL
 	},
 	.include_html = FALSE
     };
@@ -1113,12 +1114,15 @@ notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
 	{ NOTMUCH_OPT_BOOLEAN, &params.crypto.verify, "verify", 'v', 0 },
 	{ NOTMUCH_OPT_BOOLEAN, &params.output_body, "body", 'b', 0 },
 	{ NOTMUCH_OPT_BOOLEAN, &params.include_html, "include-html", 0, 0 },
+	{ NOTMUCH_OPT_INHERIT, (void *) &notmuch_shared_options, NULL, 0, 0 },
 	{ 0, 0, 0, 0, 0 }
     };
 
     opt_index = parse_arguments (argc, argv, options, 1);
     if (opt_index < 0)
 	return EXIT_FAILURE;
+
+    notmuch_process_shared_options (argv[0]);
 
     /* decryption implies verification */
     if (params.crypto.decrypt)
@@ -1202,6 +1206,8 @@ notmuch_show_command (notmuch_config_t *config, int argc, char *argv[])
 	fprintf (stderr, "Error: notmuch show requires at least one search term.\n");
 	return EXIT_FAILURE;
     }
+
+    params.crypto.gpgpath = notmuch_config_get_crypto_gpg_path (config);
 
     if (notmuch_database_open (notmuch_config_get_database_path (config),
 			       NOTMUCH_DATABASE_MODE_READ_ONLY, &notmuch))

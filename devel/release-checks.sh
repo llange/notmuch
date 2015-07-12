@@ -59,6 +59,17 @@ readonly VERSION
 
 # In the rest of this file, tests collect list of errors to be fixed
 
+echo -n "Checking that git working directory is clean... "
+git_status=`git status --porcelain`
+if [ "$git_status" = '' ]
+then
+	echo Yes.
+else
+	echo No.
+	append_emsg "Git working directory is not clean (git status --porcelain)."
+fi
+unset git_status
+
 verfail ()
 {
 	echo No.
@@ -130,7 +141,7 @@ else
 fi
 
 echo -n "Checking that python bindings version is $VERSION... "
-py_version=`python -c "execfile('$PV_FILE'); print __VERSION__"`
+py_version=`python -c "with open('$PV_FILE') as vf: exec(vf.read()); print __VERSION__"`
 if [ "$py_version" = "$VERSION" ]
 then
 	echo Yes.

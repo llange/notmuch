@@ -181,6 +181,7 @@ there will be called at other points of notmuch execution."
 (defvar notmuch-search-stash-map
   (let ((map (make-sparse-keymap)))
     (define-key map "i" 'notmuch-search-stash-thread-id)
+    (define-key map "q" 'notmuch-stash-query)
     (define-key map "?" 'notmuch-subkeymap-help)
     map)
   "Submap for stash commands")
@@ -190,6 +191,11 @@ there will be called at other points of notmuch execution."
   "Copy thread ID of current thread to kill-ring."
   (interactive)
   (notmuch-common-do-stash (notmuch-search-find-thread-id)))
+
+(defun notmuch-stash-query ()
+  "Copy current query to kill-ring."
+  (interactive)
+  (notmuch-common-do-stash (notmuch-search-get-query)))
 
 (defvar notmuch-search-query-string)
 (defvar notmuch-search-target-thread)
@@ -855,13 +861,15 @@ See `notmuch-tag' for information on the format of TAG-CHANGES."
   "Read a notmuch-query from the minibuffer with completion.
 
 PROMPT is the string to prompt with."
-  (lexical-let
-      ((completions
-	(append (list "folder:" "path:" "thread:" "id:" "date:" "from:" "to:"
-		      "subject:" "attachment:")
-		(mapcar (lambda (tag)
-			  (concat "tag:" (notmuch-escape-boolean-term tag)))
-			(process-lines notmuch-command "search" "--output=tags" "*")))))
+  (lexical-let*
+      ((all-tags
+        (mapcar (lambda (tag) (notmuch-escape-boolean-term tag))
+                (process-lines notmuch-command "search" "--output=tags" "*")))
+       (completions
+	 (append (list "folder:" "path:" "thread:" "id:" "date:" "from:" "to:"
+		       "subject:" "attachment:" "mimetype:")
+		 (mapcar (lambda (tag) (concat "tag:" tag)) all-tags)
+		 (mapcar (lambda (tag) (concat "is:" tag)) all-tags))))
     (let ((keymap (copy-keymap minibuffer-local-map))
 	  (current-query (case major-mode
 			   (notmuch-search-mode (notmuch-search-get-query))

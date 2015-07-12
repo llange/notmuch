@@ -80,6 +80,7 @@ typedef struct notmuch_crypto {
     notmuch_crypto_context_t* gpgctx;
     notmuch_bool_t verify;
     notmuch_bool_t decrypt;
+    const char *gpgpath;
 } notmuch_crypto_t;
 
 typedef struct notmuch_show_params {
@@ -278,6 +279,13 @@ notmuch_config_set_database_path (notmuch_config_t *config,
 				  const char *database_path);
 
 const char *
+notmuch_config_get_crypto_gpg_path (notmuch_config_t *config);
+
+void
+notmuch_config_set_crypto_gpg_path (notmuch_config_t *config,
+				  const char *gpg_path);
+
+const char *
 notmuch_config_get_user_name (notmuch_config_t *config);
 
 void
@@ -458,4 +466,8 @@ notmuch_database_dump (notmuch_database_t *notmuch,
 		       notmuch_bool_t gzip_output);
 
 #include "command-line-arguments.h"
+extern const notmuch_opt_desc_t  notmuch_shared_options [];
+void notmuch_process_shared_options (const char* subcommand_name);
+int notmuch_minimal_options (const char* subcommand_name,
+			     int argc, char **argv);
 #endif

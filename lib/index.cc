@@ -314,8 +314,19 @@ _index_mime_part (notmuch_message_t *message,
     const char *charset;
 
     if (! part) {
-	fprintf (stderr, "Warning: Not indexing empty mime part.\n");
+	_notmuch_database_log (_notmuch_message_database (message),
+			      "Warning: Not indexing empty mime part.\n");
 	return;
+    }
+
+    GMimeContentType *content_type = g_mime_object_get_content_type(part);
+    if (content_type) {
+	char *mime_string = g_mime_content_type_to_string(content_type);
+	if (mime_string)
+	{
+	    _notmuch_message_gen_terms (message, "mimetype", mime_string);
+	    g_free(mime_string);
+	}
     }
 
     if (GMIME_IS_MULTIPART (part)) {
@@ -334,7 +345,8 @@ _index_mime_part (notmuch_message_t *message,
 		if (i == 1)
 		    continue;
 		if (i > 1)
-		    fprintf (stderr, "Warning: Unexpected extra parts of multipart/signed. Indexing anyway.\n");
+		    _notmuch_database_log (_notmuch_message_database (message),
+					  "Warning: Unexpected extra parts of multipart/signed. Indexing anyway.\n");
 	    }
 	    if (GMIME_IS_MULTIPART_ENCRYPTED (multipart)) {
 		/* Don't index encrypted parts. */
@@ -357,8 +369,9 @@ _index_mime_part (notmuch_message_t *message,
     }
 
     if (! (GMIME_IS_PART (part))) {
-	fprintf (stderr, "Warning: Not indexing unknown mime part: %s.\n",
-		 g_type_name (G_OBJECT_TYPE (part)));
+	_notmuch_database_log (_notmuch_message_database (message),
+			      "Warning: Not indexing unknown mime part: %s.\n",
+			      g_type_name (G_OBJECT_TYPE (part)));
 	return;
     }
 

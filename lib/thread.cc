@@ -24,6 +24,8 @@
 #include <gmime/gmime.h>
 #include <glib.h> /* GHashTable */
 
+#define EMPTY_STRING(s) ((s)[0] == '\0')
+
 struct visible _notmuch_thread {
     notmuch_database_t *notmuch;
     char *thread_id;
@@ -249,8 +251,8 @@ _thread_add_message (notmuch_thread_t *thread,
 		 term != NULL;
 		 term = term->next)
 	    {
-		/* We ignore initial 'K'. */
-		if (strcmp(tag, (term->string + 1)) == 0) {
+		/* Check for an empty string, and then ignore initial 'K'. */
+		if (*(term->string) && strcmp(tag, (term->string + 1)) == 0) {
 		    message_excluded = TRUE;
 		    break;
 		}
@@ -277,7 +279,8 @@ _thread_add_message (notmuch_thread_t *thread,
 	address = internet_address_list_get_address (list, 0);
 	if (address) {
 	    author = internet_address_get_name (address);
-	    if (author == NULL) {
+	    /* We treat quoted empty names as if they were empty. */
+	    if (author == NULL || author[0] == '\0') {
 		InternetAddressMailbox *mailbox;
 		mailbox = INTERNET_ADDRESS_MAILBOX (address);
 		author = internet_address_mailbox_get_addr (mailbox);
@@ -331,10 +334,12 @@ _thread_set_subject_from_message (notmuch_thread_t *thread,
 	cleaned_subject = talloc_strdup (thread, subject);
     }
 
-    if (thread->subject)
-	talloc_free (thread->subject);
+    if (! EMPTY_STRING(cleaned_subject)) {
+	if (thread->subject)
+	    talloc_free (thread->subject);
 
-    thread->subject = talloc_strdup (thread, cleaned_subject);
+	thread->subject = talloc_strdup (thread, cleaned_subject);
+    }
 }
 
 /* Add a message to this thread which is known to match the original
@@ -359,7 +364,8 @@ _thread_add_matched_message (notmuch_thread_t *thread,
 
     if (date > thread->newest || ! thread->matched_messages) {
 	thread->newest = date;
-	if (sort != NOTMUCH_SORT_OLDEST_FIRST)
+	const char *cur_subject = notmuch_thread_get_subject(thread);
+	if (sort != NOTMUCH_SORT_OLDEST_FIRST || EMPTY_STRING(cur_subject))
 	    _thread_set_subject_from_message (thread, message);
     }
 

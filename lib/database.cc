@@ -254,6 +254,7 @@ static prefix_t PROBABILISTIC_PREFIX[]= {
     { "from",			"XFROM" },
     { "to",			"XTO" },
     { "attachment",		"XATTACHMENT" },
+    { "mimetype",		"XMIMETYPE"},
     { "subject",		"XSUBJECT"},
 };
 
@@ -304,6 +305,11 @@ static const struct {
       "exact folder:/path: search", "rw" },
     { NOTMUCH_FEATURE_GHOSTS,
       "mail documents for missing messages", "w"},
+    /* Knowledge of the index mime-types are not required for reading
+     * a database because a reader will just be unable to query
+     * them. */
+    { NOTMUCH_FEATURE_INDEXED_MIMETYPES,
+      "indexed MIME types", "w"},
 };
 
 const char *
@@ -336,10 +342,29 @@ notmuch_status_to_string (notmuch_status_t status)
 	return "Unsupported operation";
     case NOTMUCH_STATUS_UPGRADE_REQUIRED:
 	return "Operation requires a database upgrade";
+    case NOTMUCH_STATUS_PATH_ERROR:
+	return "Path supplied is illegal for this function";
     default:
     case NOTMUCH_STATUS_LAST_STATUS:
 	return "Unknown error status value";
     }
+}
+
+void
+_notmuch_database_log (notmuch_database_t *notmuch,
+		      const char *format,
+		      ...)
+{
+    va_list va_args;
+
+    va_start (va_args, format);
+
+    if (notmuch->status_string)
+	talloc_free (notmuch->status_string);
+
+    notmuch->status_string = talloc_vasprintf (notmuch, format, va_args);
+
+    va_end (va_args);
 }
 
 static void
@@ -450,7 +475,7 @@ notmuch_database_find_message (notmuch_database_t *notmuch,
 
 	return NOTMUCH_STATUS_SUCCESS;
     } catch (const Xapian::Error &error) {
-	fprintf (stderr, "A Xapian exception occurred finding message: %s.\n",
+	_notmuch_database_log (notmuch, "A Xapian exception occurred finding message: %s.\n",
 		 error.get_msg().c_str());
 	notmuch->exception_reported = TRUE;
 	*message_ret = NULL;
@@ -602,29 +627,56 @@ parse_references (void *ctx,
 notmuch_status_t
 notmuch_database_create (const char *path, notmuch_database_t **database)
 {
+    char *status_string = NULL;
+    notmuch_status_t status;
+
+    status = notmuch_database_create_verbose (path, database,
+					      &status_string);
+
+    if (status_string) {
+	fputs (status_string, stderr);
+	free (status_string);
+    }
+
+    return status;
+}
+
+notmuch_status_t
+notmuch_database_create_verbose (const char *path,
+				 notmuch_database_t **database,
+				 char **status_string)
+{
     notmuch_status_t status = NOTMUCH_STATUS_SUCCESS;
     notmuch_database_t *notmuch = NULL;
     char *notmuch_path = NULL;
+    char *message = NULL;
     struct stat st;
     int err;
 
     if (path == NULL) {
-	fprintf (stderr, "Error: Cannot create a database for a NULL path.\n");
+	message = strdup ("Error: Cannot create a database for a NULL path.\n");
 	status = NOTMUCH_STATUS_NULL_POINTER;
+	goto DONE;
+    }
+
+    if (path[0] != '/') {
+	message = strdup ("Error: Database path must be absolute.\n");
+	status = NOTMUCH_STATUS_PATH_ERROR;
 	goto DONE;
     }
 
     err = stat (path, &st);
     if (err) {
-	fprintf (stderr, "Error: Cannot create database at %s: %s.\n",
-		 path, strerror (errno));
+	IGNORE_RESULT (asprintf (&message, "Error: Cannot create database at %s: %s.\n",
+				path, strerror (errno)));
 	status = NOTMUCH_STATUS_FILE_ERROR;
 	goto DONE;
     }
 
     if (! S_ISDIR (st.st_mode)) {
-	fprintf (stderr, "Error: Cannot create database at %s: Not a directory.\n",
-		 path);
+	IGNORE_RESULT (asprintf (&message, "Error: Cannot create database at %s: "
+				 "Not a directory.\n",
+				 path));
 	status = NOTMUCH_STATUS_FILE_ERROR;
 	goto DONE;
     }
@@ -634,21 +686,22 @@ notmuch_database_create (const char *path, notmuch_database_t **database)
     err = mkdir (notmuch_path, 0755);
 
     if (err) {
-	fprintf (stderr, "Error: Cannot create directory %s: %s.\n",
-		 notmuch_path, strerror (errno));
+	IGNORE_RESULT (asprintf (&message, "Error: Cannot create directory %s: %s.\n",
+				 notmuch_path, strerror (errno)));
 	status = NOTMUCH_STATUS_FILE_ERROR;
 	goto DONE;
     }
 
-    status = notmuch_database_open (path,
-				    NOTMUCH_DATABASE_MODE_READ_WRITE,
-				    &notmuch);
+    status = notmuch_database_open_verbose (path,
+					    NOTMUCH_DATABASE_MODE_READ_WRITE,
+					    &notmuch, &message);
     if (status)
 	goto DONE;
 
-    /* Upgrade doesn't add this feature to existing databases, but new
-     * databases have it. */
+    /* Upgrade doesn't add these feature to existing databases, but
+     * new databases have them. */
     notmuch->features |= NOTMUCH_FEATURE_FROM_SUBJECT_ID_VALUES;
+    notmuch->features |= NOTMUCH_FEATURE_INDEXED_MIMETYPES;
 
     status = notmuch_database_upgrade (notmuch, NULL, NULL);
     if (status) {
@@ -660,6 +713,12 @@ notmuch_database_create (const char *path, notmuch_database_t **database)
     if (notmuch_path)
 	talloc_free (notmuch_path);
 
+    if (message) {
+	if (status_string)
+	    *status_string = message;
+	else
+	    free (message);
+    }
     if (database)
 	*database = notmuch;
     else
@@ -671,7 +730,7 @@ notmuch_status_t
 _notmuch_database_ensure_writable (notmuch_database_t *notmuch)
 {
     if (notmuch->mode == NOTMUCH_DATABASE_MODE_READ_ONLY) {
-	fprintf (stderr, "Cannot write to a read-only database.\n");
+	_notmuch_database_log (notmuch, "Cannot write to a read-only database.\n");
 	return NOTMUCH_STATUS_READ_ONLY_DATABASE;
     }
 
@@ -760,37 +819,64 @@ notmuch_database_open (const char *path,
 		       notmuch_database_mode_t mode,
 		       notmuch_database_t **database)
 {
+    char *status_string = NULL;
+    notmuch_status_t status;
+
+    status = notmuch_database_open_verbose (path, mode, database,
+					   &status_string);
+
+    if (status_string) {
+	fputs (status_string, stderr);
+	free (status_string);
+    }
+
+    return status;
+}
+
+notmuch_status_t
+notmuch_database_open_verbose (const char *path,
+			       notmuch_database_mode_t mode,
+			       notmuch_database_t **database,
+			       char **status_string)
+{
     notmuch_status_t status = NOTMUCH_STATUS_SUCCESS;
     void *local = talloc_new (NULL);
     notmuch_database_t *notmuch = NULL;
     char *notmuch_path, *xapian_path, *incompat_features;
+    char *message = NULL;
     struct stat st;
     int err;
     unsigned int i, version;
     static int initialized = 0;
 
     if (path == NULL) {
-	fprintf (stderr, "Error: Cannot open a database for a NULL path.\n");
+	message = strdup ("Error: Cannot open a database for a NULL path.\n");
 	status = NOTMUCH_STATUS_NULL_POINTER;
 	goto DONE;
     }
 
+    if (path[0] != '/') {
+	message = strdup ("Error: Database path must be absolute.\n");
+	status = NOTMUCH_STATUS_PATH_ERROR;
+	goto DONE;
+    }
+
     if (! (notmuch_path = talloc_asprintf (local, "%s/%s", path, ".notmuch"))) {
-	fprintf (stderr, "Out of memory\n");
+	message = strdup ("Out of memory\n");
 	status = NOTMUCH_STATUS_OUT_OF_MEMORY;
 	goto DONE;
     }
 
     err = stat (notmuch_path, &st);
     if (err) {
-	fprintf (stderr, "Error opening database at %s: %s\n",
-		 notmuch_path, strerror (errno));
+	IGNORE_RESULT (asprintf (&message, "Error opening database at %s: %s\n",
+				 notmuch_path, strerror (errno)));
 	status = NOTMUCH_STATUS_FILE_ERROR;
 	goto DONE;
     }
 
     if (! (xapian_path = talloc_asprintf (local, "%s/%s", notmuch_path, "xapian"))) {
-	fprintf (stderr, "Out of memory\n");
+	message = strdup ("Out of memory\n");
 	status = NOTMUCH_STATUS_OUT_OF_MEMORY;
 	goto DONE;
     }
@@ -808,6 +894,7 @@ notmuch_database_open (const char *path,
 
     notmuch = talloc_zero (NULL, notmuch_database_t);
     notmuch->exception_reported = FALSE;
+    notmuch->status_string = NULL;
     notmuch->path = talloc_strdup (notmuch, path);
 
     if (notmuch->path[strlen (notmuch->path) - 1] == '/')
@@ -830,11 +917,11 @@ notmuch_database_open (const char *path,
 	 * means a dramatically incompatible change. */
 	version = notmuch_database_get_version (notmuch);
 	if (version > NOTMUCH_DATABASE_VERSION) {
-	    fprintf (stderr,
-		     "Error: Notmuch database at %s\n"
-		     "       has a newer database format version (%u) than supported by this\n"
-		     "       version of notmuch (%u).\n",
-		     notmuch_path, version, NOTMUCH_DATABASE_VERSION);
+	    IGNORE_RESULT (asprintf (&message,
+		      "Error: Notmuch database at %s\n"
+		      "       has a newer database format version (%u) than supported by this\n"
+		      "       version of notmuch (%u).\n",
+				     notmuch_path, version, NOTMUCH_DATABASE_VERSION));
 	    notmuch->mode = NOTMUCH_DATABASE_MODE_READ_ONLY;
 	    notmuch_database_destroy (notmuch);
 	    notmuch = NULL;
@@ -849,11 +936,11 @@ notmuch_database_open (const char *path,
 	    version, mode == NOTMUCH_DATABASE_MODE_READ_WRITE ? 'w' : 'r',
 	    &incompat_features);
 	if (incompat_features) {
-	    fprintf (stderr,
-		     "Error: Notmuch database at %s\n"
-		     "       requires features (%s)\n"
-		     "       not supported by this version of notmuch.\n",
-		     notmuch_path, incompat_features);
+	    IGNORE_RESULT (asprintf (&message,
+		"Error: Notmuch database at %s\n"
+		"       requires features (%s)\n"
+		"       not supported by this version of notmuch.\n",
+				     notmuch_path, incompat_features));
 	    notmuch->mode = NOTMUCH_DATABASE_MODE_READ_ONLY;
 	    notmuch_database_destroy (notmuch);
 	    notmuch = NULL;
@@ -899,8 +986,8 @@ notmuch_database_open (const char *path,
 	    notmuch->query_parser->add_prefix (prefix->name, prefix->prefix);
 	}
     } catch (const Xapian::Error &error) {
-	fprintf (stderr, "A Xapian exception occurred opening database: %s\n",
-		 error.get_msg().c_str());
+	IGNORE_RESULT (asprintf (&message, "A Xapian exception occurred opening database: %s\n",
+				 error.get_msg().c_str()));
 	notmuch_database_destroy (notmuch);
 	notmuch = NULL;
 	status = NOTMUCH_STATUS_XAPIAN_EXCEPTION;
@@ -908,6 +995,13 @@ notmuch_database_open (const char *path,
 
   DONE:
     talloc_free (local);
+
+    if (message) {
+	if (status_string)
+	    *status_string = message;
+	else
+	    free (message);
+    }
 
     if (database)
 	*database = notmuch;
@@ -942,7 +1036,7 @@ notmuch_database_close (notmuch_database_t *notmuch)
 	} catch (const Xapian::Error &error) {
 	    status = NOTMUCH_STATUS_XAPIAN_EXCEPTION;
 	    if (! notmuch->exception_reported) {
-		fprintf (stderr, "Error: A Xapian exception occurred closing database: %s\n",
+		_notmuch_database_log (notmuch, "Error: A Xapian exception occurred closing database: %s\n",
 			 error.get_msg().c_str());
 	    }
 	}
@@ -1032,13 +1126,18 @@ notmuch_database_compact (const char *path,
     notmuch_database_t *notmuch = NULL;
     struct stat statbuf;
     notmuch_bool_t keep_backup;
+    char *message = NULL;
 
     local = talloc_new (NULL);
     if (! local)
 	return NOTMUCH_STATUS_OUT_OF_MEMORY;
 
-    ret = notmuch_database_open (path, NOTMUCH_DATABASE_MODE_READ_WRITE, &notmuch);
+    ret = notmuch_database_open_verbose (path,
+					 NOTMUCH_DATABASE_MODE_READ_WRITE,
+					 &notmuch,
+					 &message);
     if (ret) {
+	if (status_cb) status_cb (message, closure);
 	goto DONE;
     }
 
@@ -1069,12 +1168,12 @@ notmuch_database_compact (const char *path,
     }
 
     if (stat (backup_path, &statbuf) != -1) {
-	fprintf (stderr, "Path already exists: %s\n", backup_path);
+	_notmuch_database_log (notmuch, "Path already exists: %s\n", backup_path);
 	ret = NOTMUCH_STATUS_FILE_ERROR;
 	goto DONE;
     }
     if (errno != ENOENT) {
-	fprintf (stderr, "Unknown error while stat()ing path: %s\n",
+	_notmuch_database_log (notmuch, "Unknown error while stat()ing path: %s\n",
 		 strerror (errno));
 	ret = NOTMUCH_STATUS_FILE_ERROR;
 	goto DONE;
@@ -1094,20 +1193,20 @@ notmuch_database_compact (const char *path,
 	compactor.set_destdir (compact_xapian_path);
 	compactor.compact ();
     } catch (const Xapian::Error &error) {
-	fprintf (stderr, "Error while compacting: %s\n", error.get_msg().c_str());
+	_notmuch_database_log (notmuch, "Error while compacting: %s\n", error.get_msg().c_str());
 	ret = NOTMUCH_STATUS_XAPIAN_EXCEPTION;
 	goto DONE;
     }
 
     if (rename (xapian_path, backup_path)) {
-	fprintf (stderr, "Error moving %s to %s: %s\n",
+	_notmuch_database_log (notmuch, "Error moving %s to %s: %s\n",
 		 xapian_path, backup_path, strerror (errno));
 	ret = NOTMUCH_STATUS_FILE_ERROR;
 	goto DONE;
     }
 
     if (rename (compact_xapian_path, xapian_path)) {
-	fprintf (stderr, "Error moving %s to %s: %s\n",
+	_notmuch_database_log (notmuch, "Error moving %s to %s: %s\n",
 		 compact_xapian_path, xapian_path, strerror (errno));
 	ret = NOTMUCH_STATUS_FILE_ERROR;
 	goto DONE;
@@ -1115,7 +1214,7 @@ notmuch_database_compact (const char *path,
 
     if (! keep_backup) {
 	if (rmtree (backup_path)) {
-	    fprintf (stderr, "Error removing old database %s: %s\n",
+	    _notmuch_database_log (notmuch, "Error removing old database %s: %s\n",
 		     backup_path, strerror (errno));
 	    ret = NOTMUCH_STATUS_FILE_ERROR;
 	    goto DONE;
@@ -1125,6 +1224,10 @@ notmuch_database_compact (const char *path,
   DONE:
     if (notmuch) {
 	notmuch_status_t ret2;
+
+	const char *str = notmuch_database_status_string (notmuch);
+	if (status_cb && str)
+	    status_cb (str, closure);
 
 	ret2 = notmuch_database_destroy (notmuch);
 
@@ -1144,7 +1247,7 @@ notmuch_database_compact (unused (const char *path),
 			  unused (notmuch_compact_status_cb_t status_cb),
 			  unused (void *closure))
 {
-    fprintf (stderr, "notmuch was compiled against a xapian version lacking compaction support.\n");
+    _notmuch_database_log (notmuch, "notmuch was compiled against a xapian version lacking compaction support.\n");
     return NOTMUCH_STATUS_UNSUPPORTED_OPERATION;
 }
 #endif
@@ -1247,7 +1350,7 @@ notmuch_database_upgrade (notmuch_database_t *notmuch,
 	return NOTMUCH_STATUS_SUCCESS;
 
     if (progress_notify) {
-	/* Setup our handler for SIGALRM */
+	/* Set up our handler for SIGALRM */
 	memset (&action, 0, sizeof (struct sigaction));
 	action.sa_handler = handle_sigalrm;
 	sigemptyset (&action.sa_mask);
@@ -1422,7 +1525,7 @@ notmuch_database_upgrade (notmuch_database_t *notmuch,
 	    }
 
 	    if (private_status) {
-		fprintf (stderr,
+		_notmuch_database_log (notmuch,
 			 "Upgrade failed while creating ghost messages.\n");
 		status = COERCE_STATUS (private_status, "Unexpected status from _notmuch_message_initialize_ghost");
 		goto DONE;
@@ -1472,7 +1575,7 @@ notmuch_database_begin_atomic (notmuch_database_t *notmuch)
     try {
 	(static_cast <Xapian::WritableDatabase *> (notmuch->xapian_db))->begin_transaction (false);
     } catch (const Xapian::Error &error) {
-	fprintf (stderr, "A Xapian exception occurred beginning transaction: %s.\n",
+	_notmuch_database_log (notmuch, "A Xapian exception occurred beginning transaction: %s.\n",
 		 error.get_msg().c_str());
 	notmuch->exception_reported = TRUE;
 	return NOTMUCH_STATUS_XAPIAN_EXCEPTION;
@@ -1506,7 +1609,7 @@ notmuch_database_end_atomic (notmuch_database_t *notmuch)
 	if (thresh && atoi (thresh) == 1)
 	    db->flush ();
     } catch (const Xapian::Error &error) {
-	fprintf (stderr, "A Xapian exception occurred committing transaction: %s.\n",
+	_notmuch_database_log (notmuch, "A Xapian exception occurred committing transaction: %s.\n",
 		 error.get_msg().c_str());
 	notmuch->exception_reported = TRUE;
 	return NOTMUCH_STATUS_XAPIAN_EXCEPTION;
@@ -1752,7 +1855,7 @@ notmuch_database_get_directory (notmuch_database_t *notmuch,
 	*directory = _notmuch_directory_create (notmuch, path,
 						NOTMUCH_FIND_LOOKUP, &status);
     } catch (const Xapian::Error &error) {
-	fprintf (stderr, "A Xapian exception occurred getting directory: %s.\n",
+	_notmuch_database_log (notmuch, "A Xapian exception occurred getting directory: %s.\n",
 		 error.get_msg().c_str());
 	notmuch->exception_reported = TRUE;
 	status = NOTMUCH_STATUS_XAPIAN_EXCEPTION;
@@ -2225,7 +2328,7 @@ notmuch_database_add_message (notmuch_database_t *notmuch,
     if (ret)
 	return ret;
 
-    message_file = _notmuch_message_file_open (filename);
+    message_file = _notmuch_message_file_open (notmuch, filename);
     if (message_file == NULL)
 	return NOTMUCH_STATUS_FILE_ERROR;
 
@@ -2334,7 +2437,7 @@ notmuch_database_add_message (notmuch_database_t *notmuch,
 
 	_notmuch_message_sync (message);
     } catch (const Xapian::Error &error) {
-	fprintf (stderr, "A Xapian exception occurred adding message: %s.\n",
+	_notmuch_database_log (notmuch, "A Xapian exception occurred adding message: %s.\n",
 		 error.get_msg().c_str());
 	notmuch->exception_reported = TRUE;
 	ret = NOTMUCH_STATUS_XAPIAN_EXCEPTION;
@@ -2426,7 +2529,7 @@ notmuch_database_find_message_by_filename (notmuch_database_t *notmuch,
 		status = NOTMUCH_STATUS_OUT_OF_MEMORY;
 	}
     } catch (const Xapian::Error &error) {
-	fprintf (stderr, "Error: A Xapian exception occurred finding message by filename: %s\n",
+	_notmuch_database_log (notmuch, "Error: A Xapian exception occurred finding message by filename: %s\n",
 		 error.get_msg().c_str());
 	notmuch->exception_reported = TRUE;
 	status = NOTMUCH_STATUS_XAPIAN_EXCEPTION;
@@ -2479,9 +2582,15 @@ notmuch_database_get_all_tags (notmuch_database_t *db)
 	_notmuch_string_list_sort (tags);
 	return _notmuch_tags_create (db, tags);
     } catch (const Xapian::Error &error) {
-	fprintf (stderr, "A Xapian exception occurred getting tags: %s.\n",
+	_notmuch_database_log (db, "A Xapian exception occurred getting tags: %s.\n",
 		 error.get_msg().c_str());
 	db->exception_reported = TRUE;
 	return NULL;
     }
+}
+
+const char *
+notmuch_database_status_string (notmuch_database_t *notmuch)
+{
+    return notmuch->status_string;
 }
