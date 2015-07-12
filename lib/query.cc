@@ -174,13 +174,26 @@ _notmuch_exclude_tags (notmuch_query_t *query, Xapian::Query xquery)
 notmuch_messages_t *
 notmuch_query_search_messages (notmuch_query_t *query)
 {
+    notmuch_status_t status;
+    notmuch_messages_t *messages;
+    status = notmuch_query_search_messages_st (query, &messages);
+    if (status)
+	return NULL;
+    else
+	return messages;
+}
+
+notmuch_status_t
+notmuch_query_search_messages_st (notmuch_query_t *query,
+				  notmuch_messages_t **out)
+{
     notmuch_database_t *notmuch = query->notmuch;
     const char *query_string = query->query_string;
     notmuch_mset_messages_t *messages;
 
     messages = talloc (query, notmuch_mset_messages_t);
     if (unlikely (messages == NULL))
-	return NULL;
+	return NOTMUCH_STATUS_OUT_OF_MEMORY;
 
     try {
 
@@ -279,15 +292,19 @@ notmuch_query_search_messages (notmuch_query_t *query)
 	messages->iterator = mset.begin ();
 	messages->iterator_end = mset.end ();
 
-	return &messages->base;
+	*out = &messages->base;
+	return NOTMUCH_STATUS_SUCCESS;
 
     } catch (const Xapian::Error &error) {
-	fprintf (stderr, "A Xapian exception occurred performing query: %s\n",
-		 error.get_msg().c_str());
-	fprintf (stderr, "Query string was: %s\n", query->query_string);
+	_notmuch_database_log (notmuch,
+			       "A Xapian exception occurred performing query: %s\n"
+			       "Query string was: %s\n",
+			       error.get_msg().c_str(),
+			       query->query_string);
+
 	notmuch->exception_reported = TRUE;
 	talloc_free (messages);
-	return NULL;
+	return NOTMUCH_STATUS_XAPIAN_EXCEPTION;
     }
 }
 
@@ -412,24 +429,39 @@ _notmuch_threads_destructor (notmuch_threads_t *threads)
     return 0;
 }
 
+
 notmuch_threads_t *
 notmuch_query_search_threads (notmuch_query_t *query)
 {
+    notmuch_status_t status;
+    notmuch_threads_t *threads;
+    status = notmuch_query_search_threads_st (query, &threads);
+    if (status)
+	return NULL;
+    else
+	return threads;
+}
+
+notmuch_status_t
+notmuch_query_search_threads_st (notmuch_query_t *query,
+				 notmuch_threads_t **out)
+{
     notmuch_threads_t *threads;
     notmuch_messages_t *messages;
+    notmuch_status_t status;
 
     threads = talloc (query, notmuch_threads_t);
     if (threads == NULL)
-	return NULL;
+	return NOTMUCH_STATUS_OUT_OF_MEMORY;
     threads->doc_ids = NULL;
     talloc_set_destructor (threads, _notmuch_threads_destructor);
 
     threads->query = query;
 
-    messages = notmuch_query_search_messages (query);
-    if (messages == NULL) {
-	    talloc_free (threads);
-	    return NULL;
+    status = notmuch_query_search_messages_st (query, &messages);
+    if (status) {
+	talloc_free (threads);
+	return status;
     }
 
     threads->doc_ids = g_array_new (FALSE, FALSE, sizeof (unsigned int));
@@ -445,10 +477,11 @@ notmuch_query_search_threads (notmuch_query_t *query)
     if (! _notmuch_doc_id_set_init (threads, &threads->match_set,
 				    threads->doc_ids)) {
 	talloc_free (threads);
-	return NULL;
+	return NOTMUCH_STATUS_OUT_OF_MEMORY;
     }
 
-    return threads;
+    *out = threads;
+    return NOTMUCH_STATUS_SUCCESS;
 }
 
 void
@@ -557,14 +590,22 @@ notmuch_query_count_messages (notmuch_query_t *query)
 
 	enquire.set_query (final_query);
 
-	mset = enquire.get_mset (0, notmuch->xapian_db->get_doccount ());
+	/*
+	 * Set the checkatleast parameter to the number of documents
+	 * in the database to make get_matches_estimated() exact.
+	 */
+	mset = enquire.get_mset (0, notmuch->xapian_db->get_doccount (),
+				 notmuch->xapian_db->get_doccount ());
 
 	count = mset.get_matches_estimated();
 
     } catch (const Xapian::Error &error) {
-	fprintf (stderr, "A Xapian exception occurred: %s\n",
-		 error.get_msg().c_str());
-	fprintf (stderr, "Query string was: %s\n", query->query_string);
+	_notmuch_database_log (notmuch,
+			       "A Xapian exception occurred performing query: %s\n"
+			       "Query string was: %s\n",
+			       error.get_msg().c_str(),
+			       query->query_string);
+
     }
 
     return count;

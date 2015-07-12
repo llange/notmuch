@@ -76,7 +76,8 @@ _notmuch_message_file_destructor (notmuch_message_file_t *message)
 /* Create a new notmuch_message_file_t for 'filename' with 'ctx' as
  * the talloc owner. */
 notmuch_message_file_t *
-_notmuch_message_file_open_ctx (void *ctx, const char *filename)
+_notmuch_message_file_open_ctx (notmuch_database_t *notmuch,
+				void *ctx, const char *filename)
 {
     notmuch_message_file_t *message;
 
@@ -98,16 +99,18 @@ _notmuch_message_file_open_ctx (void *ctx, const char *filename)
     return message;
 
   FAIL:
-    fprintf (stderr, "Error opening %s: %s\n", filename, strerror (errno));
+    _notmuch_database_log (notmuch, "Error opening %s: %s\n",
+			  filename, strerror (errno));
     _notmuch_message_file_close (message);
 
     return NULL;
 }
 
 notmuch_message_file_t *
-_notmuch_message_file_open (const char *filename)
+_notmuch_message_file_open (notmuch_database_t *notmuch,
+			    const char *filename)
 {
-    return _notmuch_message_file_open_ctx (NULL, filename);
+    return _notmuch_message_file_open_ctx (notmuch, NULL, filename);
 }
 
 void
@@ -170,25 +173,12 @@ _notmuch_message_file_parse (notmuch_message_file_t *message)
 	goto DONE;
     }
 
-    if (is_mbox) {
-	if (! g_mime_parser_eos (parser)) {
-	    /* This is a multi-message mbox. */
-	    status = NOTMUCH_STATUS_FILE_NOT_EMAIL;
-	    goto DONE;
-	}
+    if (is_mbox && ! g_mime_parser_eos (parser)) {
 	/*
-	 * For historical reasons, we support single-message mboxes,
-	 * but this behavior is likely to change in the future, so
-	 * warn.
+	 * This is a multi-message mbox. (For historical reasons, we
+	 * do support single-message mboxes.)
 	 */
-	static notmuch_bool_t mbox_warning = FALSE;
-	if (! mbox_warning) {
-	    mbox_warning = TRUE;
-	    fprintf (stderr, "\
-Warning: %s is an mbox containing a single message,\n\
-likely caused by misconfigured mail delivery.  Support for single-message\n\
-mboxes is deprecated and may be removed in the future.\n", message->filename);
-	}
+	status = NOTMUCH_STATUS_FILE_NOT_EMAIL;
     }
 
   DONE:

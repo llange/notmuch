@@ -314,8 +314,16 @@ main (int argc, char *argv[])
 	goto DONE;
     }
 
-    if (print_help) {
-	ret = notmuch_help_command (NULL, argc - 1, &argv[1]);
+    /* Handle notmuch --help [command] and notmuch command --help. */
+    if (print_help ||
+	(opt_index + 1 < argc && strcmp (argv[opt_index + 1], "--help") == 0)) {
+	/*
+	 * Pass the first positional argument as argv[1] so the help
+	 * command can give help for it. The help command ignores the
+	 * argv[0] passed to it.
+	 */
+	ret = notmuch_help_command (NULL, argc - opt_index + 1,
+				    argv + opt_index - 1);
 	goto DONE;
     }
 
