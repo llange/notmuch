@@ -28,6 +28,16 @@ end
 	have_local_library("libnotmuch.#{ext}", dir, 'notmuch_database_create', 'notmuch.h')
 }
 
+if ENV['EXTRA_LDFLAGS']
+  $LDFLAGS += " " + ENV['EXTRA_LDFLAGS']
+end
+
+if not ENV['LIBNOTMUCH']
+  exit 1
+end
+
+$LOCAL_LIBS += ENV['LIBNOTMUCH']
+
 # Create Makefile
 dir_config('notmuch')
 create_makefile('notmuch')
